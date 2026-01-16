@@ -1,83 +1,90 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+import os
+import json
 import click
 import pandas as pd
+import pyarrow.parquet as pq
 from sqlalchemy import create_engine
-from tqdm.auto import tqdm
+from time import time
 
-dtype = {
-    "VendorID": "Int64",
-    "passenger_count": "Int64",
-    "trip_distance": "float64",
-    "RatecodeID": "Int64",
-    "store_and_fwd_flag": "string",
-    "PULocationID": "Int64",
-    "DOLocationID": "Int64",
-    "payment_type": "Int64",
-    "fare_amount": "float64",
-    "extra": "float64",
-    "mta_tax": "float64",
-    "tip_amount": "float64",
-    "tolls_amount": "float64",
-    "improvement_surcharge": "float64",
-    "total_amount": "float64",
-    "congestion_surcharge": "float64"
-}
-
-parse_dates = [
-    "tpep_pickup_datetime",
-    "tpep_dropoff_datetime"
-]
+def get_file_iterator(file_path, chunksize, parse_dates_list=None, schema=None):
+    if file_path.endswith('.csv') or file_path.endswith('.csv.gz'):
+        return pd.read_csv(
+            file_path, 
+            iterator=True, 
+            chunksize=chunksize, 
+            parse_dates=parse_dates_list,
+            dtype=schema,
+            low_memory=False
+        )
+    elif file_path.endswith('.parquet'):
+        parquet_file = pq.ParquetFile(file_path)
+        def parquet_generator():
+            for batch in parquet_file.iter_batches(batch_size=chunksize):
+                yield batch.to_pandas()
+        return parquet_generator()
+    else:
+        raise ValueError("Error: Unsupported file format. Supported formats are .csv, .csv.gz, and .parquet")
 
 @click.command()
-@click.option('--pg-user', default='root', help='PostgreSQL username')
-@click.option('--pg-pass', default='root', help='PostgreSQL password')
-@click.option('--pg-host', default='localhost', help='PostgreSQL host')
-@click.option('--pg-port', default=5432, type=int, help='PostgreSQL port')
-@click.option('--pg-db', default='ny_taxi', help='PostgreSQL database')
-@click.option('--year', default=2021, type=int, help='Year of taxi data')
-@click.option('--month', default=1, type=int, help='Month of taxi data')
-@click.option('--target-table', default='yellow_taxi_data_2021_1', help='Target table name')
-@click.option('--chunksize', default=100000, type=int, help='Chunk size for data ingestion')
-def run(pg_user, pg_pass, pg_host, pg_port, pg_db, year, month, target_table, chunksize):
-    prefix = 'https://github.com/DataTalksClub/nyc-tlc-data/releases/download/yellow'
-    url = f'{prefix}/yellow_tripdata_{year}-{month:02d}.csv.gz'
-    engine = create_engine(f'postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}')
+@click.option('--user', required=True)
+@click.option('--password', required=True)
+@click.option('--host', required=True)
+@click.option('--port', required=True)
+@click.option('--db', required=True)
+@click.option('--table_name', required=True)
+@click.option('--url', required=True)
+@click.option('--chunksize', default=100000)
+@click.option('--parse_dates', default=None, help='Comma separated date columns')
+@click.option('--schema_path', default=None, help='Path to JSON file containing dtype schema') 
+def ingest_data(user, password, host, port, db, table_name, url, chunksize, parse_dates, schema_path):
+    dtype_schema = None
+    if schema_path:
+        if os.path.exists(schema_path):
+            with open(schema_path, 'r') as f:
+                dtype_schema = json.load(f)
+            print(f"Loaded schema from {schema_path}")
+        else:
+            print(f"Warning: Schema file {schema_path} not found. Using default inference.")
 
-    df_iter = pd.read_csv(
-        url,
-        dtype=dtype,
-        parse_dates=parse_dates,
-        iterator=True,
-        chunksize=100000,
-    )
+    parse_dates_list = parse_dates.split(',') if parse_dates else None
 
-    first_chunk= next(df_iter)
+    file_name = 'output_data'
+    if url.endswith('.csv.gz'): file_name += '.csv.gz'
+    elif url.endswith('.csv'): file_name += '.csv'
+    elif url.endswith('.parquet'): file_name += '.parquet'
+    
+    print(f"Downloading {url}...")
+    os.system(f"wget {url} -O {file_name}")
 
-    first_chunk.head(0).to_sql(
-        name=target_table,
-        con=engine,
-        if_exists="replace"
-    )
+    engine = create_engine(f'postgresql://{user}:{password}@{host}:{port}/{db}')
 
-    print("Table created")
+    try:
+        df_iter = get_file_iterator(file_name, chunksize, parse_dates_list, dtype_schema)
+        
+        t_start = time()
+        df = next(df_iter)
+        
+        df.head(0).to_sql(name=table_name, con=engine, if_exists='replace')
+        df.to_sql(name=table_name, con=engine, if_exists='append')
+        
+        print(f"Inserted first chunk, took {time() - t_start:.3f}s")
 
-    first_chunk.to_sql(
-        name=target_table,
-        con=engine,
-        if_exists="append"
-    )
+        while True:
+            try:
+                t_start = time()
+                df = next(df_iter)
+                df.to_sql(name=table_name, con=engine, if_exists='append')
+                print(f"Inserted chunk, took {time() - t_start:.3f}s")
+            except StopIteration:
+                break
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        if os.path.exists(file_name):
+            os.remove(file_name)
 
-    print("Inserted first chunk:", len(first_chunk))
-
-    for df_chunk in tqdm(df_iter):
-        df_chunk.to_sql(
-            name=target_table,
-            con=engine,
-            if_exists="append"
-        )
-        print("Inserted chunk:", len(df_chunk))
-
-if __name__ == "__main__":
-    run()
+if __name__ == '__main__':
+    ingest_data()

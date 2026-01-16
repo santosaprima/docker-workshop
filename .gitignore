@@ -1,4 +1,5 @@
 *.parquet
+terraform_creds.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
