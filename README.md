@@ -2,107 +2,85 @@
 
 Workshop Codespaces
 
-## Solutions
+## Solutions Module 2
+Can refer to workflow -> homework-flow.yaml
 
-### 1. Pip Version
+### 1. Uncompressed file size
 
-**Answer:** 25.3
+**Answer:** 128.3MiB
 
-```bash
-docker run -it --rm --entrypoint=bash python:3.13
-pip --version
+**Steps:**
+```
+Kestra -> Flow -> Executions -> Outputs -> extract -> outputFiles -> file size
+Make sure to remove these lines:
+- id: purge_files
+    type: io.kestra.plugin.core.storage.PurgeCurrentExecutionFiles
+    description: This will remove output files. If you'd like to explore Kestra outputs, disable it.
+
+taskCache: (if cached already)
+      enabled: true
 ```
 
-**Output:**
+### 2. Rendered value
+
+**Answer:** green_tripdata_2020-04.csv
+
+**Explanation:**
 ```
-pip 25.3 from /usr/local/lib/python3.13/site-packages/pip (python 3.13)
-```
+file: "{{inputs.taxi}}_tripdata_{{inputs.year}}-{{inputs.month}}.csv"
 
-### 2. Database Connection
-
-**Answer:** db:5433
-
-### 3. Trip Count
-
-**Answer:** 8007
-
-```sql
-SELECT 
-  COUNT(*)
-FROM green_taxi_trips
-WHERE
-  DATE(lpep_pickup_datetime) >= '2025-11-01' AND
-  DATE(lpep_pickup_datetime) < '2025-12-01' AND
-  trip_distance <= 1
+inputs.taxi = green
+inputs.year = 2020
+inputs.month = 04
 ```
 
-### 4. Maximum Distance Date
+### 3. Rows count for yellow taxi data in the year 2020
 
-**Answer:** 2025-11-14
+**Answer:** 24,648,499
 
-```sql
-SELECT 
-  DATE(lpep_pickup_datetime) AS "pickup_day",
-  MAX(trip_distance) AS "max_distance"
-FROM green_taxi_trips
-WHERE
-  trip_distance < 100
-GROUP BY
-  DATE(lpep_pickup_datetime)
-ORDER BY 
-  max_distance DESC
+**Steps:**
+```
+1. Using Kestra with backfill provide start date 2020-01-01 00:00:00 and end date 2021-01-01 00:00:00 and select yellow
+2. In pgadmin dashboard do sql query: 
+SELECT COUNT(*) FROM yellow_tripdata;
 ```
 
-### 5. Pickup Zone with Highest Total Amount
+### 4. Rows count for green taxi data in the year 2020
 
-**Answer:** East Harlem North
+**Answer:** 1,734,051
 
-```sql
-SELECT 
-  z."Zone" AS pickup_zone,
-  SUM(t.total_amount) AS total_amount_sum
-FROM 
-  green_taxi_trips t
-JOIN
-  zones z ON t."PULocationID" = z."LocationID"
-WHERE
-  DATE(t.lpep_pickup_datetime) = '2025-11-18'
-GROUP BY
-  z."Zone"
-ORDER BY 
-  total_amount_sum DESC
+**Steps:**
+```
+1. Using Kestra with backfill provide start date 2020-01-01 00:00:00 and end date 2021-01-01 00:00:00 and select green
+2. In pgadmin dashboard do sql query: 
+SELECT COUNT(*) FROM green_tripdata;
 ```
 
-### 6. Dropoff Zone with Maximum Tip
+### 5. Rows count for yellow taxi data for march 2021
 
-**Answer:** Yorkville West
+**Answer:** 1,925,152
 
-```sql
-SELECT 
-  z_drop."Zone" AS dropoff_zone,
-  MAX(t.tip_amount) as max_tip
-FROM 
-  green_taxi_trips t
-JOIN
-  zones z_pick ON t."PULocationID" = z_pick."LocationID"
-JOIN
-  zones z_drop ON t."DOLocationID" = z_drop."LocationID"
-WHERE
-  z_pick."Zone" = 'East Harlem North' AND
-  DATE(lpep_pickup_datetime) >= '2025-11-01' AND 
-  DATE(lpep_pickup_datetime) < '2025-12-01'
-GROUP BY 
-  z_drop."Zone"
-ORDER BY 
-  max_tip DESC
+**Steps:**
+```
+1. Using Kestra with execute flow with input: 
+taxi = yellow
+year = 2021
+month = 03
+
+2. In pgadmin dashboard do sql query: 
+SELECT COUNT(*) FROM yellow_tripdata;
 ```
 
-### 7. Terraform Commands
+### 6. Add timezone to New York in schedule trigger
 
-**Answer:** terraform init, terraform apply -auto-approve, terraform destroy
+**Answer:** Add a timezone property set to America/New_York in the Schedule trigger configuration
 
-```bash
-terraform init
-terraform apply -auto-approve
-terraform destroy
+**Example:**
+```
+- id: yellow_schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 10 1 * *"
+    timezone: America/New_York
+    inputs:
+      taxi: yellow
 ```
